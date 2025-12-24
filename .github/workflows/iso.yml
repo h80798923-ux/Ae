@@ -1,4 +1,4 @@
-name: TrixieOS Live ISO (XFCE + TRX)
+name: TrixieEdu Debian XFCE ISO
 
 on:
   workflow_dispatch:
@@ -8,111 +8,95 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            wget tar xorriso grub-pc-bin grub-common mtools squashfs-tools
+    - name: Install tools
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          live-build debootstrap squashfs-tools \
+          grub-pc-bin grub-efi-amd64-bin \
+          xorriso isolinux syslinux-utils
 
-      - name: Download Alpine minirootfs
-        run: |
-          wget https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-minirootfs-3.23.2-x86_64.tar.gz
+    - name: Configure live-build
+      run: |
+        mkdir trixieedu
+        cd trixieedu
+        lb config \
+          --distribution bookworm \
+          --archive-areas "main contrib non-free non-free-firmware" \
+          --debian-installer false \
+          --bootappend-live "boot=live quiet" \
+          --iso-volume "TrixieEdu" \
+          --iso-application "TrixieEdu Linux" \
+          --iso-publisher "ProjectA"
 
-      - name: Extract rootfs
-        run: |
-          mkdir rootfs
-          sudo tar -xzf alpine-minirootfs-3.23.2-x86_64.tar.gz -C rootfs
-          sudo cp /etc/resolv.conf rootfs/etc/
+    - name: Packages (Education)
+      run: |
+        cd trixieedu
+        mkdir -p config/package-lists
 
-      - name: Configure XFCE + TRX
-        run: |
-          sudo chroot rootfs /bin/sh << 'EOF'
-          apk update
-          apk add \
-            xorg-server \
-            xinit \
-            xfce4 \
-            xfce4-terminal \
-            dbus \
-            ttf-dejavu \
-            bash
+        cat > config/package-lists/edu.list.chroot << 'EOF'
+        linux-image-amd64
+        systemd systemd-sysv
+        xfce4 xfce4-goodies
+        lightdm lightdm-gtk-greeter
+        network-manager
+        xorg dbus-x11
 
-          echo "TrixieOS" > /etc/hostname
+        gcompris
+        scratch
+        geogebra
+        libreoffice
+        firefox-esr
+        python3 python3-pip
 
-          cat > /etc/os-release << OSR
-          NAME="TrixieOS"
-          ID=trixieos
-          VERSION="1.0"
-          PRETTY_NAME="TrixieOS Live (XFCE)"
-          OSR
+        fonts-dejavu
+        firmware-linux firmware-linux-nonfree
+        sudo nano
+        EOF
 
-          echo "exec startxfce4" > /root/.xinitrc
-          chmod +x /root/.xinitrc
-          echo 'if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then startx; fi' > /root/.profile
-          sed -i 's/^tty1.*/tty1::respawn:\/sbin\/agetty --autologin root tty1 linux/' /etc/inittab
+    - name: Add TRX
+      run: |
+        cd trixieedu
+        mkdir -p config/includes.chroot/usr/bin
+        cat > config/includes.chroot/usr/bin/trx << 'EOF'
+        #!/bin/bash
+        case "$1" in
+          install) sudo apt install -y "${@:2}" ;;
+          remove) sudo apt remove -y "${@:2}" ;;
+          update) sudo apt update ;;
+          upgrade) sudo apt upgrade -y ;;
+          *) echo "trx {install|remove|update|upgrade}" ;;
+        esac
+        EOF
+        chmod +x config/includes.chroot/usr/bin/trx
 
-          # APK -> TRX
-          mv /sbin/apk /sbin/apk.real
+    - name: Branding
+      run: |
+        cd trixieedu
+        mkdir -p config/includes.chroot/etc
+        echo "TrixieEdu" > config/includes.chroot/etc/hostname
+        cat > config/includes.chroot/etc/os-release << 'EOF'
+        NAME="TrixieEdu"
+        PRETTY_NAME="TrixieEdu Linux (Education)"
+        EOF
 
-          cat > /usr/bin/trx << 'TRX'
-          #!/bin/sh
-          case "$1" in
-            install) shift; exec /sbin/apk.real add "$@" ;;
-            remove)  shift; exec /sbin/apk.real del "$@" ;;
-            search)  shift; exec /sbin/apk.real search "$@" ;;
-            update)         exec /sbin/apk.real update ;;
-            *)              exec /sbin/apk.real "$@" ;;
-          esac
-          TRX
+    - name: Autologin XFCE
+      run: |
+        cd trixieedu
+        mkdir -p config/includes.chroot/etc/lightdm
+        cat > config/includes.chroot/etc/lightdm/lightdm.conf << 'EOF'
+        [Seat:*]
+        autologin-user=live
+        autologin-session=xfce
+        EOF
 
-          chmod +x /usr/bin/trx
+    - name: Build ISO
+      run: |
+        cd trixieedu
+        sudo lb build
 
-          cat > /usr/bin/apk << 'APK'
-          #!/bin/sh
-          echo "apk kapali."
-          echo "trx install <paket> kullan."
-          exit 1
-          APK
-
-          chmod +x /usr/bin/apk
-          EOF
-
-      - name: Create squashfs
-        run: |
-          sudo mksquashfs rootfs filesystem.squashfs -comp xz
-
-      - name: Download kernel + initramfs
-        run: |
-          wget https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-netboot-3.23.2-x86_64.tar.gz
-          mkdir netboot
-          tar -xzf alpine-netboot-3.23.2-x86_64.tar.gz -C netboot
-
-      - name: Prepare ISO tree
-        run: |
-          mkdir -p iso/boot/grub
-          cp netboot/boot/vmlinuz-lts iso/boot/vmlinuz
-          cp netboot/boot/initramfs-lts iso/boot/initrd
-          cp filesystem.squashfs iso/boot/filesystem.squashfs
-
-      - name: GRUB config (TEXT ONLY)
-        run: |
-          cat > iso/boot/grub/grub.cfg << 'EOF'
-          set timeout=3
-          set default=0
-
-          menuentry "TrixieOS Live (XFCE)" {
-            echo "ProjectA tarafindan yapildi"
-            linux /boot/vmlinuz alpine_dev=ramdisk quiet
-            initrd /boot/initrd
-          }
-          EOF
-
-      - name: Build ISO
-        run: |
-          grub-mkrescue -o TrixieOS-Live-XFCE.iso iso
-
-      - name: Upload ISO
-        uses: actions/upload-artifact@v4
-        with:
-          name: TrixieOS-XFCE-ISO
-          path: TrixieOS-Live-XFCE.iso
+    - name: Upload ISO
+      uses: actions/upload-artifact@v4
+      with:
+        name: TrixieEdu-ISO
+        path: trixieedu/live-image-amd64.hybrid.iso
