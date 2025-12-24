@@ -1,0 +1,94 @@
+name: TrixieOS Live ISO (Fluxbox)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            wget tar xorriso grub-pc-bin grub-common mtools \
+            squashfs-tools
+
+      - name: Download Alpine minirootfs
+        run: |
+          wget https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-minirootfs-3.23.2-x86_64.tar.gz
+
+      - name: Extract rootfs
+        run: |
+          mkdir rootfs
+          sudo tar -xzf alpine-minirootfs-3.23.2-x86_64.tar.gz -C rootfs
+          sudo cp /etc/resolv.conf rootfs/etc/
+
+      - name: Configure TrixieOS + Fluxbox
+        run: |
+          sudo chroot rootfs /bin/sh << 'EOF'
+          apk update
+          apk add \
+            xorg-server \
+            xinit \
+            fluxbox \
+            rxvt-unicode \
+            dbus \
+            ttf-dejavu \
+            bash
+
+          echo "TrixieOS" > /etc/hostname
+
+          cat > /etc/os-release << OSR
+          NAME="TrixieOS"
+          ID=trixieos
+          VERSION="0.1"
+          PRETTY_NAME="TrixieOS 0.1"
+          OSR
+
+          echo "exec startfluxbox" > /root/.xinitrc
+          chmod +x /root/.xinitrc
+          EOF
+
+      - name: Create squashfs
+        run: |
+          sudo mksquashfs rootfs filesystem.squashfs -comp xz
+
+      - name: Download Alpine kernel + initramfs
+        run: |
+          wget https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-netboot-3.23.2-x86_64.tar.gz
+          mkdir netboot
+          tar -xzf alpine-netboot-3.23.2-x86_64.tar.gz -C netboot
+
+      - name: Prepare ISO tree
+        run: |
+          mkdir -p iso/boot/grub
+          cp netboot/boot/vmlinuz-lts iso/boot/vmlinuz
+          cp netboot/boot/initramfs-lts iso/boot/initrd
+          cp filesystem.squashfs iso/boot/filesystem.squashfs
+
+      - name: Create GRUB config
+        run: |
+          cat > iso/boot/grub/grub.cfg << 'EOF'
+          set timeout=5
+          set default=0
+
+          menuentry "TrixieOS Live (Fluxbox)" {
+            linux /boot/vmlinuz alpine_dev=ramdisk quiet
+            initrd /boot/initrd
+          }
+          EOF
+
+      - name: Build ISO
+        run: |
+          grub-mkrescue -o TrixieOS-Live-Fluxbox.iso iso
+
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrixieOS-Live-ISO
+          path: TrixieOS-Live-Fluxbox.iso
