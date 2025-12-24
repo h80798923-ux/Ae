@@ -1,4 +1,4 @@
-name: TrixieOS Live ISO (XFCE Root)
+name: TrixieOS Live ISO (XFCE + TRX)
 
 on:
   workflow_dispatch:
@@ -12,8 +12,7 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y \
-            wget tar xorriso grub-pc-bin grub-common mtools \
-            squashfs-tools
+            wget tar xorriso grub-pc-bin grub-common mtools squashfs-tools
 
       - name: Download Alpine minirootfs
         run: |
@@ -25,7 +24,7 @@ jobs:
           sudo tar -xzf alpine-minirootfs-3.23.2-x86_64.tar.gz -C rootfs
           sudo cp /etc/resolv.conf rootfs/etc/
 
-      - name: Configure TrixieOS XFCE (root only)
+      - name: Configure XFCE + TRX
         run: |
           sudo chroot rootfs /bin/sh << 'EOF'
           apk update
@@ -43,16 +42,39 @@ jobs:
           cat > /etc/os-release << OSR
           NAME="TrixieOS"
           ID=trixieos
-          VERSION="0.3"
+          VERSION="1.0"
           PRETTY_NAME="TrixieOS Live (XFCE)"
           OSR
 
           echo "exec startxfce4" > /root/.xinitrc
           chmod +x /root/.xinitrc
-
           echo 'if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then startx; fi' > /root/.profile
-
           sed -i 's/^tty1.*/tty1::respawn:\/sbin\/agetty --autologin root tty1 linux/' /etc/inittab
+
+          # APK -> TRX
+          mv /sbin/apk /sbin/apk.real
+
+          cat > /usr/bin/trx << 'TRX'
+          #!/bin/sh
+          case "$1" in
+            install) shift; exec /sbin/apk.real add "$@" ;;
+            remove)  shift; exec /sbin/apk.real del "$@" ;;
+            search)  shift; exec /sbin/apk.real search "$@" ;;
+            update)         exec /sbin/apk.real update ;;
+            *)              exec /sbin/apk.real "$@" ;;
+          esac
+          TRX
+
+          chmod +x /usr/bin/trx
+
+          cat > /usr/bin/apk << 'APK'
+          #!/bin/sh
+          echo "apk kapali."
+          echo "trx install <paket> kullan."
+          exit 1
+          APK
+
+          chmod +x /usr/bin/apk
           EOF
 
       - name: Create squashfs
@@ -72,13 +94,14 @@ jobs:
           cp netboot/boot/initramfs-lts iso/boot/initrd
           cp filesystem.squashfs iso/boot/filesystem.squashfs
 
-      - name: GRUB config
+      - name: GRUB config (TEXT ONLY)
         run: |
           cat > iso/boot/grub/grub.cfg << 'EOF'
           set timeout=3
           set default=0
 
           menuentry "TrixieOS Live (XFCE)" {
+            echo "ProjectA tarafindan yapildi"
             linux /boot/vmlinuz alpine_dev=ramdisk quiet
             initrd /boot/initrd
           }
