@@ -1,17 +1,14 @@
-name: TrixieOS Live ISO (Fluxbox)
+name: TrixieOS Live ISO (XFCE Root)
 
 on:
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y \
@@ -28,15 +25,15 @@ jobs:
           sudo tar -xzf alpine-minirootfs-3.23.2-x86_64.tar.gz -C rootfs
           sudo cp /etc/resolv.conf rootfs/etc/
 
-      - name: Configure TrixieOS + Fluxbox
+      - name: Configure TrixieOS XFCE (root only)
         run: |
           sudo chroot rootfs /bin/sh << 'EOF'
           apk update
           apk add \
             xorg-server \
             xinit \
-            fluxbox \
-            rxvt-unicode \
+            xfce4 \
+            xfce4-terminal \
             dbus \
             ttf-dejavu \
             bash
@@ -46,19 +43,23 @@ jobs:
           cat > /etc/os-release << OSR
           NAME="TrixieOS"
           ID=trixieos
-          VERSION="0.1"
-          PRETTY_NAME="TrixieOS 0.1"
+          VERSION="0.3"
+          PRETTY_NAME="TrixieOS Live (XFCE)"
           OSR
 
-          echo "exec startfluxbox" > /root/.xinitrc
+          echo "exec startxfce4" > /root/.xinitrc
           chmod +x /root/.xinitrc
+
+          echo 'if [ -z "$DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then startx; fi' > /root/.profile
+
+          sed -i 's/^tty1.*/tty1::respawn:\/sbin\/agetty --autologin root tty1 linux/' /etc/inittab
           EOF
 
       - name: Create squashfs
         run: |
           sudo mksquashfs rootfs filesystem.squashfs -comp xz
 
-      - name: Download Alpine kernel + initramfs
+      - name: Download kernel + initramfs
         run: |
           wget https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-netboot-3.23.2-x86_64.tar.gz
           mkdir netboot
@@ -71,13 +72,13 @@ jobs:
           cp netboot/boot/initramfs-lts iso/boot/initrd
           cp filesystem.squashfs iso/boot/filesystem.squashfs
 
-      - name: Create GRUB config
+      - name: GRUB config
         run: |
           cat > iso/boot/grub/grub.cfg << 'EOF'
-          set timeout=5
+          set timeout=3
           set default=0
 
-          menuentry "TrixieOS Live (Fluxbox)" {
+          menuentry "TrixieOS Live (XFCE)" {
             linux /boot/vmlinuz alpine_dev=ramdisk quiet
             initrd /boot/initrd
           }
@@ -85,10 +86,10 @@ jobs:
 
       - name: Build ISO
         run: |
-          grub-mkrescue -o TrixieOS-Live-Fluxbox.iso iso
+          grub-mkrescue -o TrixieOS-Live-XFCE.iso iso
 
       - name: Upload ISO
         uses: actions/upload-artifact@v4
         with:
-          name: TrixieOS-Live-ISO
-          path: TrixieOS-Live-Fluxbox.iso
+          name: TrixieOS-XFCE-ISO
+          path: TrixieOS-Live-XFCE.iso
