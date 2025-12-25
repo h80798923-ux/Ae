@@ -93,8 +93,8 @@ jobs:
     - name: Alpine bootstrap for GUI packages
       run: |
         sudo mkdir -p /alpine
-        sudo wget https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/alpine-minirootfs.tar.gz
-        sudo tar -xf alpine-minirootfs.tar.gz -C /alpine
+        sudo wget https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-minirootfs-3.23.2-x86_64.tar.gz
+        sudo tar -xf alpine-minirootfs-3.23.2-x86_64.tar. -C /alpine
 
         sudo chroot /alpine /bin/sh << 'EOF'
         apk add --no-cache \
