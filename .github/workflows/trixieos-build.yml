@@ -1,0 +1,116 @@
+name: Build TrixieOS (Alpine base)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v4
+
+    # 🔥 Disk aç
+    - name: Free disk space
+      run: |
+        sudo rm -rf /usr/share/dotnet
+        sudo rm -rf /opt/ghc
+        sudo rm -rf /usr/local/lib/android
+        df -h
+
+    # 📦 Gerekli paketler
+    - name: Install build deps
+      run: |
+        sudo apt update
+        sudo apt install -y \
+          build-essential bc bison flex \
+          libncurses-dev libssl-dev \
+          wget xorriso grub-pc-bin \
+          grub-efi-amd64-bin mtools \
+          cpio tar xz-utils
+
+    # ======================
+    # 🧱 Alpine minirootfs
+    # ======================
+    - name: Download Alpine rootfs
+      run: |
+        wget https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/alpine-minirootfs-3.19.1-x86_64.tar.gz
+        mkdir rootfs
+        tar -xzf alpine-minirootfs-*.tar.gz -C rootfs
+        rm alpine-minirootfs-*.tar.gz
+
+    # ======================
+    # 🧰 BusyBox (source)
+    # ======================
+    - name: Build BusyBox
+      run: |
+        wget https://busybox.net/downloads/busybox-1.36.1.tar.bz2
+        tar xf busybox-1.36.1.tar.bz2
+        cd busybox-1.36.1
+        make defconfig
+        sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
+        make -j$(nproc)
+        make CONFIG_PREFIX=../rootfs install
+
+    # ======================
+    # 🧠 Kernel (source)
+    # ======================
+    - name: Build Linux kernel
+      run: |
+        wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.8.tar.xz
+        tar xf linux-6.6.8.tar.xz
+        cd linux-6.6.8
+        make defconfig
+        make -j$(nproc)
+        cp arch/x86/boot/bzImage ../vmlinuz
+
+    # ======================
+    # ⚙️ init (Alpine style)
+    # ======================
+    - name: Setup init
+      run: |
+        cat <<'EOF' > rootfs/init
+        #!/bin/sh
+        mount -t proc proc /proc
+        mount -t sysfs sysfs /sys
+        mount -t devtmpfs devtmpfs /dev
+        echo "Welcome to TrixieOS (Alpine based)"
+        exec /bin/sh
+        EOF
+        chmod +x rootfs/init
+
+    # ======================
+    # 📦 initramfs
+    # ======================
+    - name: Build initramfs
+      run: |
+        cd rootfs
+        find . | cpio -o -H newc | gzip > ../initramfs.gz
+
+    # ======================
+    # 💿 ISO (GRUB)
+    # ======================
+    - name: Create ISO
+      run: |
+        mkdir -p iso/boot/grub
+        cp vmlinuz iso/vmlinuz
+        cp initramfs.gz iso/initramfs.gz
+
+        cat <<EOF > iso/boot/grub/grub.cfg
+        set timeout=5
+        menuentry "TrixieOS Alpine" {
+          linux /vmlinuz quiet
+          initrd /initramfs.gz
+        }
+        EOF
+
+        grub-mkrescue -o TrixieOS.iso iso
+
+    # ======================
+    # ⬆️ Artifact
+    # ======================
+    - name: Upload ISO
+      uses: actions/upload-artifact@v4
+      with:
+        name: TrixieOS
+        path: TrixieOS.iso
