@@ -1,4 +1,4 @@
-name: Build TrixieOS (Real Linux Distro)
+name: Build TrixieOs Fluxbox ISO
 
 on:
   workflow_dispatch:
@@ -8,139 +8,130 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    # -------------------------------------------------
-    # 1️⃣ GEREKLİ DERLEME BAĞIMLILIKLARI
-    # -------------------------------------------------
-    - name: Install build dependencies
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y \
-          build-essential gcc g++ make \
-          bc bison flex \
-          libssl-dev \
-          libelf-dev elfutils zlib1g-dev \
-          libncurses-dev \
-          xorriso grub-pc-bin grub-efi-amd64-bin \
-          squashfs-tools \
-          wget curl git \
-          cpio rsync \
-          pkg-config \
-          python3 \
-          ca-certificates
+          build-essential bc bison flex \
+          libncurses-dev libssl-dev \
+          wget tar gzip xz-utils \
+          cpio grub-pc-bin xorriso
 
-    # -------------------------------------------------
-    # 2️⃣ KAYNAK KLASÖRLER
-    # -------------------------------------------------
-    - name: Prepare directories
+    # =========================
+    # Bootstrap rootfs
+    # =========================
+    - name: Create rootfs
       run: |
-        mkdir -p trixieos/{kernel,busybox,rootfs,iso}
-        mkdir -p trixieos/rootfs/{bin,sbin,etc,proc,sys,usr/{bin,sbin},dev,run,tmp,root}
+        mkdir -p rootfs iso/boot/grub
+        wget https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/alpine-minirootfs-3.19.1-x86_64.tar.gz
+        tar -xzf alpine-minirootfs-3.19.1-x86_64.tar.gz -C rootfs
 
-    # -------------------------------------------------
-    # 3️⃣ VANILLA LINUX KERNEL
-    # -------------------------------------------------
-    - name: Build Linux kernel (vanilla)
-      run: |
-        cd trixieos/kernel
-        wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.8.tar.xz
-        tar -xf linux-6.6.8.tar.xz
-        cd linux-6.6.8
+        # TrixieOs kimlik
+        cat << 'EOF' > rootfs/etc/os-release
+        NAME="TrixieOs"
+        ID=trixieos
+        PRETTY_NAME="TrixieOs"
+        EOF
 
-        make defconfig
-        make -j$(nproc)
-
-        cp arch/x86/boot/bzImage ../../iso/vmlinuz
-
-    # -------------------------------------------------
-    # 4️⃣ BUSYBOX (USERLAND)
-    # -------------------------------------------------
+    # =========================
+    # BusyBox (source)
+    # =========================
     - name: Build BusyBox
       run: |
-        cd trixieos/busybox
         wget https://busybox.net/downloads/busybox-1.36.1.tar.bz2
-        tar -xf busybox-1.36.1.tar.bz2
+        tar xf busybox-1.36.1.tar.bz2
         cd busybox-1.36.1
-
         make defconfig
         sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
-
         make -j$(nproc)
-        make CONFIG_PREFIX=../../rootfs install
+        make CONFIG_PREFIX=../rootfs install
 
-    # -------------------------------------------------
-    # 5️⃣ TEMEL SİSTEM DOSYALARI
-    # -------------------------------------------------
-    - name: Create base system files
+    # =========================
+    # GUI – Fluxbox
+    # =========================
+    - name: Install Fluxbox GUI
       run: |
-        cd trixieos/rootfs
+        sudo mount --bind /dev rootfs/dev
+        sudo mount -t proc proc rootfs/proc
+        sudo mount -t sysfs sys rootfs/sys
 
-        echo "TrixieOS" > etc/hostname
-        echo "TrixieOS ProjectA tarafından yapıldı" > etc/issue
+        sudo chroot rootfs /bin/sh << 'EOF'
+        apk update
+        apk add xorg-server xinit fluxbox mesa-dri-gallium \
+                xf86-input-libinput xf86-video-vesa \
+                font-dejavu dbus
 
-        cat > init << 'EOF'
+        echo "exec startfluxbox" > /root/.xinitrc
+        ln -s /root/.xinitrc /.xinitrc
+        EOF
+
+        sudo umount rootfs/dev rootfs/proc rootfs/sys
+
+    # =========================
+    # Init
+    # =========================
+    - name: Init system
+      run: |
+        cat << 'EOF' > rootfs/init
         #!/bin/sh
-        mount -t proc proc /proc
-        mount -t sysfs sys /sys
-        mount -t devtmpfs dev /dev
-        echo "Welcome to TrixieOS"
+        mount -t proc none /proc
+        mount -t sysfs none /sys
+        mount -t devtmpfs none /dev
+        clear
+        echo "================================="
+        echo "  TrixieOs ProjectA tarafından yapıldı"
+        echo "================================="
+        echo "GUI başlatmak için: startx"
         exec /bin/sh
         EOF
-        chmod +x init
+        chmod +x rootfs/init
 
-    # -------------------------------------------------
-    # 6️⃣ OPENBOX + XORG (ALPINE ROOTFS ÜZERİNDEN)
-    # -------------------------------------------------
-    - name: Alpine bootstrap for GUI packages
+    # =========================
+    # Kernel
+    # =========================
+    - name: Build Kernel
       run: |
-        sudo mkdir -p /alpine
-        sudo wget https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/x86_64/alpine-minirootfs-3.23.2-x86_64.tar.gz
-        sudo tar -xf alpine-minirootfs-3.23.2-x86_64.tar.gz -C /alpine
+        wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.8.tar.xz
+        tar xf linux-6.6.8.tar.xz
+        cd linux-6.6.8
+        make defconfig
+        make -j$(nproc)
+        cp arch/x86/boot/bzImage ../iso/vmlinuz
 
-        sudo chroot /alpine /bin/sh << 'EOF'
-        apk add --no-cache \
-          xorg-server \
-          xf86-video-vesa \
-          openbox \
-          xterm \
-          dbus \
-          sudo
-        EOF
-
-        sudo rsync -a /alpine/usr trixieos/rootfs/
-        sudo rsync -a /alpine/etc trixieos/rootfs/
-
-    # -------------------------------------------------
-    # 7️⃣ INITRAMFS
-    # -------------------------------------------------
-    - name: Create initramfs
+    # =========================
+    # Initramfs
+    # =========================
+    - name: Build initramfs
       run: |
-        cd trixieos/rootfs
-        find . | cpio -o -H newc | gzip > ../iso/initramfs.gz
+        cd rootfs
+        find . | cpio -H newc -ov --owner root:root > ../iso/initrd.img
 
-    # -------------------------------------------------
-    # 8️⃣ GRUB + ISO (LIVE)
-    # -------------------------------------------------
-    - name: Build Live ISO
+    # =========================
+    # GRUB
+    # =========================
+    - name: GRUB config
       run: |
-        mkdir -p trixieos/iso/boot/grub
-
-        cat > trixieos/iso/boot/grub/grub.cfg << 'EOF'
-        set timeout=5
+        cat << 'EOF' > iso/boot/grub/grub.cfg
+        set timeout=0
         set default=0
 
-        menuentry "TrixieOS Live" {
+        menuentry "TrixieOs (Fluxbox)" {
           linux /vmlinuz quiet
-          initrd /initramfs.gz
+          initrd /initrd.img
         }
         EOF
 
-        grub-mkrescue -o TrixieOS-Live.iso trixieos/iso
+    # =========================
+    # ISO
+    # =========================
+    - name: Build ISO
+      run: |
+        grub-mkrescue -o TrixieOs-Fluxbox.iso iso
 
-    # -------------------------------------------------
-    # 9️⃣ ARTEFAKT
-    # -------------------------------------------------
-    - uses: actions/upload-artifact@v4
+    - name: Upload ISO
+      uses: actions/upload-artifact@v4
       with:
-        name: TrixieOS
-        path: |
-          TrixieOS-Live.iso
+        name: TrixieOs-Fluxbox
+        path: TrixieOs-Fluxbox.iso
