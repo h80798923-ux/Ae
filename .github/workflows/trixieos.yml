@@ -1,4 +1,4 @@
-name: Build TrixieOS (Real Distro)
+name: Build TrixieOS (Real Linux Distro)
 
 on:
   workflow_dispatch:
@@ -8,86 +8,139 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+    # -------------------------------------------------
+    # 1️⃣ GEREKLİ DERLEME BAĞIMLILIKLARI
+    # -------------------------------------------------
     - name: Install build dependencies
       run: |
         sudo apt update
         sudo apt install -y \
           build-essential gcc g++ make \
-          libncurses-dev flex bison bc \
-          libssl-dev libelf-dev \
+          bc bison flex \
+          libssl-dev \
+          libelf-dev elfutils zlib1g-dev \
+          libncurses-dev \
           xorriso grub-pc-bin grub-efi-amd64-bin \
-          wget cpio rsync xz-utils \
-          libx11-dev libxft-dev libxinerama-dev \
-          pkg-config
+          squashfs-tools \
+          wget curl git \
+          cpio rsync \
+          pkg-config \
+          python3 \
+          ca-certificates
 
-    - name: Prepare workspace
+    # -------------------------------------------------
+    # 2️⃣ KAYNAK KLASÖRLER
+    # -------------------------------------------------
+    - name: Prepare directories
       run: |
-        mkdir -p $HOME/trixieos/{kernel,busybox,rootfs,iso}
-        echo "TrixieOS - ProjectA" > $HOME/trixieos/rootfs/etc/issue
+        mkdir -p trixieos/{kernel,busybox,rootfs,iso}
+        mkdir -p trixieos/rootfs/{bin,sbin,etc,proc,sys,usr/{bin,sbin},dev,run,tmp,root}
 
-    # ---------------- KERNEL ----------------
-    - name: Build Linux kernel
+    # -------------------------------------------------
+    # 3️⃣ VANILLA LINUX KERNEL
+    # -------------------------------------------------
+    - name: Build Linux kernel (vanilla)
       run: |
-        cd $HOME/trixieos/kernel
+        cd trixieos/kernel
         wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.8.tar.xz
         tar -xf linux-6.6.8.tar.xz
         cd linux-6.6.8
+
         make defconfig
         make -j$(nproc)
-        make modules_install INSTALL_MOD_PATH=$HOME/trixieos/rootfs
-        cp arch/x86/boot/bzImage $HOME/trixieos/iso/vmlinuz
 
-    # ---------------- BUSYBOX ----------------
+        cp arch/x86/boot/bzImage ../../iso/vmlinuz
+
+    # -------------------------------------------------
+    # 4️⃣ BUSYBOX (USERLAND)
+    # -------------------------------------------------
     - name: Build BusyBox
       run: |
-        cd $HOME/trixieos/busybox
+        cd trixieos/busybox
         wget https://busybox.net/downloads/busybox-1.36.1.tar.bz2
         tar -xf busybox-1.36.1.tar.bz2
         cd busybox-1.36.1
+
         make defconfig
         sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' .config
+
         make -j$(nproc)
-        make CONFIG_PREFIX=$HOME/trixieos/rootfs install
+        make CONFIG_PREFIX=../../rootfs install
 
-    # ---------------- ROOTFS ----------------
-    - name: Create root filesystem
+    # -------------------------------------------------
+    # 5️⃣ TEMEL SİSTEM DOSYALARI
+    # -------------------------------------------------
+    - name: Create base system files
       run: |
-        ROOT=$HOME/trixieos/rootfs
-        mkdir -p $ROOT/{proc,sys,dev,etc,usr/bin,boot}
-        ln -s usr/bin $ROOT/bin
-        ln -s usr/bin $ROOT/sbin
+        cd trixieos/rootfs
 
-        cat > $ROOT/init << 'EOF'
+        echo "TrixieOS" > etc/hostname
+        echo "TrixieOS ProjectA tarafından yapıldı" > etc/issue
+
+        cat > init << 'EOF'
         #!/bin/sh
-        mount -t proc none /proc
-        mount -t sysfs none /sys
-        mount -t devtmpfs none /dev
-        echo "Welcome to TrixieOS - ProjectA"
+        mount -t proc proc /proc
+        mount -t sysfs sys /sys
+        mount -t devtmpfs dev /dev
+        echo "Welcome to TrixieOS"
         exec /bin/sh
         EOF
-        chmod +x $ROOT/init
+        chmod +x init
 
-    # ---------------- ISO ----------------
-    - name: Create Live ISO
+    # -------------------------------------------------
+    # 6️⃣ OPENBOX + XORG (ALPINE ROOTFS ÜZERİNDEN)
+    # -------------------------------------------------
+    - name: Alpine bootstrap for GUI packages
       run: |
-        ISO=$HOME/trixieos/iso
-        ROOT=$HOME/trixieos/rootfs
+        sudo mkdir -p /alpine
+        sudo wget https://dl-cdn.alpinelinux.org/alpine/latest-stable/releases/x86_64/alpine-minirootfs.tar.gz
+        sudo tar -xf alpine-minirootfs.tar.gz -C /alpine
 
-        mkdir -p $ISO/boot/grub
-        cp $ROOT/init $ISO/init
-        cp $ISO/vmlinuz $ISO/boot/vmlinuz
+        sudo chroot /alpine /bin/sh << 'EOF'
+        apk add --no-cache \
+          xorg-server \
+          xf86-video-vesa \
+          openbox \
+          xterm \
+          dbus \
+          sudo
+        EOF
 
-        cat > $ISO/boot/grub/grub.cfg << 'EOF'
+        sudo rsync -a /alpine/usr trixieos/rootfs/
+        sudo rsync -a /alpine/etc trixieos/rootfs/
+
+    # -------------------------------------------------
+    # 7️⃣ INITRAMFS
+    # -------------------------------------------------
+    - name: Create initramfs
+      run: |
+        cd trixieos/rootfs
+        find . | cpio -o -H newc | gzip > ../iso/initramfs.gz
+
+    # -------------------------------------------------
+    # 8️⃣ GRUB + ISO (LIVE)
+    # -------------------------------------------------
+    - name: Build Live ISO
+      run: |
+        mkdir -p trixieos/iso/boot/grub
+
+        cat > trixieos/iso/boot/grub/grub.cfg << 'EOF'
         set timeout=5
+        set default=0
+
         menuentry "TrixieOS Live" {
-          linux /boot/vmlinuz init=/init quiet
+          linux /vmlinuz quiet
+          initrd /initramfs.gz
         }
         EOF
 
-        grub-mkrescue -o TrixieOS-Live.iso $ISO
+        grub-mkrescue -o TrixieOS-Live.iso trixieos/iso
 
-    - name: Upload ISO
-      uses: actions/upload-artifact@v4
+    # -------------------------------------------------
+    # 9️⃣ ARTEFAKT
+    # -------------------------------------------------
+    - uses: actions/upload-artifact@v4
       with:
         name: TrixieOS
-        path: TrixieOS-Live.iso
+        path: |
+          TrixieOS-Live.iso
