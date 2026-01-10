@@ -1,0 +1,105 @@
+name: BaseLinux Debian KDE ISO
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    env:
+      LB_BOOTSTRAP_OPTIONS: "--variant=minbase"
+
+    steps:
+      - name: Install host dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            live-build debootstrap squashfs-tools \
+            grub-pc-bin grub-efi-amd64-bin \
+            xorriso isolinux syslinux-utils \
+            build-essential bc bison flex libssl-dev libelf-dev \
+            libncurses-dev wget
+
+      ################################
+      # 1️⃣ KERNEL DERLE
+      ################################
+      - name: Build custom kernel
+        run: |
+          set -e
+          KERNEL_VER=6.6.15
+          mkdir kernel && cd kernel
+          wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$KERNEL_VER.tar.xz
+          tar -xf linux-$KERNEL_VER.tar.xz
+          cd linux-$KERNEL_VER
+          make defconfig
+          make -j$(nproc)
+          make modules_install INSTALL_MOD_PATH=../out
+          mkdir -p ../out/boot
+          cp arch/x86/boot/bzImage ../out/boot/vmlinuz
+
+      ################################
+      # 2️⃣ LIVE-BUILD CONFIG
+      ################################
+      - name: Configure live-build
+        run: |
+          mkdir baselinux
+          cd baselinux
+
+          lb config \
+            --distribution bookworm \
+            --archive-areas "main contrib non-free non-free-firmware" \
+            --debian-installer false \
+            --binary-images iso-hybrid \
+            --bootappend-live "boot=live quiet" \
+            --iso-volume "BaseLinux" \
+            --iso-application "BaseLinux KDE" \
+            --iso-publisher "BaseLinux Project"
+
+      ################################
+      # 3️⃣ KDE + BASE (NO ENV)
+      ################################
+      - name: Package lists
+        run: |
+          cd baselinux
+          mkdir -p config/package-lists
+
+          cat > config/package-lists/base.list.chroot << 'EOF'
+          systemd-sysv
+          dbus
+          sudo
+
+          plasma-desktop
+          sddm
+          konsole
+          dolphin
+
+          network-manager
+          xorg
+          firefox-esr
+          EOF
+
+      ################################
+      # 4️⃣ CUSTOM KERNEL
+      ################################
+      - name: Inject kernel
+        run: |
+          cd baselinux
+          mkdir -p config/includes.chroot
+          sudo cp -r ../kernel/out/* config/includes.chroot/
+
+      ################################
+      # 5️⃣ BUILD
+      ################################
+      - name: Build ISO
+        run: |
+          cd baselinux
+          sudo lb build
+
+      ################################
+      # 6️⃣ UPLOAD
+      ################################
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: BaseLinux-ISO
+          path: baselinux/*.iso
