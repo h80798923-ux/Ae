@@ -1,102 +1,82 @@
-name: TrixieEdu Debian XFCE ISO
+name: BaseLinux Debian KDE ISO
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
-    - name: Install tools
-      run: |
-        sudo apt update
-        sudo apt install -y \
-          live-build debootstrap squashfs-tools \
-          grub-pc-bin grub-efi-amd64-bin \
-          xorriso isolinux syslinux-utils
+      - name: Install build dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            live-build debootstrap squashfs-tools \
+            grub-pc-bin grub-efi-amd64-bin \
+            xorriso isolinux syslinux-utils
 
-    - name: Configure live-build
-      run: |
-        mkdir trixieedu
-        cd trixieedu
-        lb config \
-          --distribution bookworm \
-          --archive-areas "main contrib non-free non-free-firmware" \
-          --debian-installer false \
-          --bootappend-live "boot=live quiet" \
-          --iso-volume "TrixieEdu" \
-          --iso-application "TrixieEdu Linux" \
-          --iso-publisher "ProjectA"
+      - name: Configure live-build
+        run: |
+          mkdir baselinux
+          cd baselinux
 
-    - name: Packages (Education)
-      run: |
-        cd trixieedu
-        mkdir -p config/package-lists
+          lb config \
+            --distribution bookworm \
+            --archive-areas "main contrib non-free non-free-firmware" \
+            --debian-installer false \
+            --binary-images iso-hybrid \
+            --bootappend-live "boot=live quiet splash" \
+            --iso-volume "BaseLinux" \
+            --iso-application "BaseLinux KDE" \
+            --iso-publisher "BaseLinux Project"
 
-        cat > config/package-lists/edu.list.chroot << 'EOF'
-        linux-image-amd64
-        systemd systemd-sysv
-        xfce4 xfce4-goodies
-        lightdm lightdm-gtk-greeter
-        network-manager
-        xorg dbus-x11
+      - name: KDE and base packages
+        run: |
+          cd baselinux
+          mkdir -p config/package-lists
 
-        gcompris
-        scratch
-        geogebra
-        libreoffice
-        firefox-esr
-        python3 python3-pip
+          cat > config/package-lists/kde.list.chroot << 'EOF'
+          linux-image-amd64
+          systemd-sysv
+          dbus
 
-        fonts-dejavu
-        firmware-linux firmware-linux-nonfree
-        sudo nano
-        EOF
+          kde-standard
+          sddm
+          plasma-workspace
+          kde-terminal
+          dolphin
+          konsole
 
-    - name: Add TRX
-      run: |
-        cd trixieedu
-        mkdir -p config/includes.chroot/usr/bin
-        cat > config/includes.chroot/usr/bin/trx << 'EOF'
-        #!/bin/bash
-        case "$1" in
-          install) sudo apt install -y "${@:2}" ;;
-          remove) sudo apt remove -y "${@:2}" ;;
-          update) sudo apt update ;;
-          upgrade) sudo apt upgrade -y ;;
-          *) echo "trx {install|remove|update|upgrade}" ;;
-        esac
-        EOF
-        chmod +x config/includes.chroot/usr/bin/trx
+          network-manager
+          xorg
+          firmware-linux
+          firmware-linux-nonfree
 
-    - name: Branding
-      run: |
-        cd trixieedu
-        mkdir -p config/includes.chroot/etc
-        echo "TrixieEdu" > config/includes.chroot/etc/hostname
-        cat > config/includes.chroot/etc/os-release << 'EOF'
-        NAME="TrixieEdu"
-        PRETTY_NAME="TrixieEdu Linux (Education)"
-        EOF
+          firefox-esr
+          sudo
+          EOF
 
-    - name: Autologin XFCE
-      run: |
-        cd trixieedu
-        mkdir -p config/includes.chroot/etc/lightdm
-        cat > config/includes.chroot/etc/lightdm/lightdm.conf << 'EOF'
-        [Seat:*]
-        autologin-user=live
-        autologin-session=xfce
-        EOF
+      - name: Enable NetworkManager and SDDM
+        run: |
+          cd baselinux
+          mkdir -p config/hooks/normal
 
-    - name: Build ISO
-      run: |
-        cd trixieedu
-        sudo lb build
+          cat > config/hooks/normal/enable-services.hook.chroot << 'EOF'
+          #!/bin/sh
+          systemctl enable NetworkManager
+          systemctl enable sddm
+          EOF
 
-    - name: Upload ISO
-      uses: actions/upload-artifact@v4
-      with:
-        name: TrixieEdu-ISO
-        path: trixieedu/live-image-amd64.hybrid.iso
+          chmod +x config/hooks/normal/enable-services.hook.chroot
+
+      - name: Build ISO
+        run: |
+          cd baselinux
+          sudo lb build
+
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: BaseLinux-ISO
+          path: baselinux/*.iso
