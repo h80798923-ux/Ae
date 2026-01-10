@@ -1,4 +1,4 @@
-name: BaseLinux Debian KDE ISO
+name: BaseLinux KDE (Custom Kernel)
 
 on:
   workflow_dispatch:
@@ -8,14 +8,40 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Install build dependencies
+      - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y \
+            build-essential bc bison flex libssl-dev libelf-dev \
+            libncurses-dev wget git \
             live-build debootstrap squashfs-tools \
             grub-pc-bin grub-efi-amd64-bin \
             xorriso isolinux syslinux-utils
 
+      ################################
+      # 1️⃣ KERNEL DERLE
+      ################################
+      - name: Build custom Linux kernel
+        run: |
+          set -e
+          KERNEL_VER=6.6.15
+          mkdir kernel
+          cd kernel
+
+          wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$KERNEL_VER.tar.xz
+          tar -xf linux-$KERNEL_VER.tar.xz
+          cd linux-$KERNEL_VER
+
+          make defconfig
+          make -j$(nproc)
+
+          mkdir -p ../out/boot
+          make modules_install INSTALL_MOD_PATH=../out
+          cp arch/x86/boot/bzImage ../out/boot/vmlinuz-$KERNEL_VER
+
+      ################################
+      # 2️⃣ LIVE-BUILD CONFIG
+      ################################
       - name: Configure live-build
         run: |
           mkdir baselinux
@@ -26,55 +52,73 @@ jobs:
             --archive-areas "main contrib non-free non-free-firmware" \
             --debian-installer false \
             --binary-images iso-hybrid \
-            --bootappend-live "boot=live quiet splash" \
+            --bootappend-live "boot=live quiet" \
             --iso-volume "BaseLinux" \
             --iso-application "BaseLinux KDE" \
             --iso-publisher "BaseLinux Project"
 
-      - name: KDE and base packages
+      ################################
+      # 3️⃣ PAKETLER (KDE + COREUTILS)
+      ################################
+      - name: Package lists
         run: |
           cd baselinux
           mkdir -p config/package-lists
 
-          cat > config/package-lists/kde.list.chroot << 'EOF'
-          linux-image-amd64
+          cat > config/package-lists/base.list.chroot << 'EOF'
           systemd-sysv
           dbus
+          coreutils
+          sudo
 
-          kde-standard
+          plasma-desktop
           sddm
-          plasma-workspace
-          kde-terminal
-          dolphin
           konsole
+          dolphin
 
           network-manager
           xorg
-          firmware-linux
-          firmware-linux-nonfree
-
           firefox-esr
-          sudo
           EOF
 
-      - name: Enable NetworkManager and SDDM
+      ################################
+      # 4️⃣ CUSTOM KERNEL ENTEGRE
+      ################################
+      - name: Inject custom kernel
+        run: |
+          cd baselinux
+          mkdir -p config/includes.chroot
+
+          sudo cp -r ../kernel/out/* config/includes.chroot/
+
+      ################################
+      # 5️⃣ SERVİSLER
+      ################################
+      - name: Enable services
         run: |
           cd baselinux
           mkdir -p config/hooks/normal
 
           cat > config/hooks/normal/enable-services.hook.chroot << 'EOF'
           #!/bin/sh
-          systemctl enable NetworkManager
-          systemctl enable sddm
+          systemctl enable NetworkManager || true
+          systemctl enable sddm || true
+          exit 0
           EOF
 
           chmod +x config/hooks/normal/enable-services.hook.chroot
 
+      ################################
+      # 6️⃣ ISO BUILD
+      ################################
       - name: Build ISO
         run: |
           cd baselinux
           sudo lb build
 
+      ################################
+      # 7️⃣ UPLOAD
+      ################################
       - name: Upload ISO
         uses: actions/upload-artifact@v4
         with:
