@@ -1,4 +1,4 @@
-name: BaseLinux KDE (Custom Kernel)
+name: BaseLinux KDE Custom Kernel ISO
 
 on:
   workflow_dispatch:
@@ -8,40 +8,36 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Install dependencies
+      - name: Install host dependencies
         run: |
           sudo apt update
           sudo apt install -y \
             build-essential bc bison flex libssl-dev libelf-dev \
-            libncurses-dev wget git \
+            libncurses-dev wget \
             live-build debootstrap squashfs-tools \
             grub-pc-bin grub-efi-amd64-bin \
             xorriso isolinux syslinux-utils
 
-      ################################
+      ############################
       # 1️⃣ KERNEL DERLE
-      ################################
-      - name: Build custom Linux kernel
+      ############################
+      - name: Build kernel
         run: |
           set -e
           KERNEL_VER=6.6.15
-          mkdir kernel
-          cd kernel
-
+          mkdir kernel && cd kernel
           wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-$KERNEL_VER.tar.xz
           tar -xf linux-$KERNEL_VER.tar.xz
           cd linux-$KERNEL_VER
-
           make defconfig
           make -j$(nproc)
-
-          mkdir -p ../out/boot
           make modules_install INSTALL_MOD_PATH=../out
-          cp arch/x86/boot/bzImage ../out/boot/vmlinuz-$KERNEL_VER
+          mkdir -p ../out/boot
+          cp arch/x86/boot/bzImage ../out/boot/vmlinuz
 
-      ################################
+      ############################
       # 2️⃣ LIVE-BUILD CONFIG
-      ################################
+      ############################
       - name: Configure live-build
         run: |
           mkdir baselinux
@@ -57,18 +53,29 @@ jobs:
             --iso-application "BaseLinux KDE" \
             --iso-publisher "BaseLinux Project"
 
-      ################################
-      # 3️⃣ PAKETLER (KDE + COREUTILS)
-      ################################
-      - name: Package lists
+      ############################
+      # 3️⃣ BOOTSTRAP FIX (CRITICAL)
+      ############################
+      - name: Bootstrap packages (FIX env)
         run: |
           cd baselinux
           mkdir -p config/package-lists
 
-          cat > config/package-lists/base.list.chroot << 'EOF'
+          cat > config/package-lists/bootstrap.list.bootstrap << 'EOF'
+          coreutils
+          util-linux
+          bash
+          EOF
+
+      ############################
+      # 4️⃣ KDE + BASE
+      ############################
+      - name: KDE packages
+        run: |
+          cd baselinux
+          cat > config/package-lists/kde.list.chroot << 'EOF'
           systemd-sysv
           dbus
-          coreutils
           sudo
 
           plasma-desktop
@@ -81,44 +88,43 @@ jobs:
           firefox-esr
           EOF
 
-      ################################
-      # 4️⃣ CUSTOM KERNEL ENTEGRE
-      ################################
-      - name: Inject custom kernel
+      ############################
+      # 5️⃣ CUSTOM KERNEL ENTEGRE
+      ############################
+      - name: Inject kernel
         run: |
           cd baselinux
           mkdir -p config/includes.chroot
-
           sudo cp -r ../kernel/out/* config/includes.chroot/
 
-      ################################
-      # 5️⃣ SERVİSLER
-      ################################
+      ############################
+      # 6️⃣ SERVİSLER
+      ############################
       - name: Enable services
         run: |
           cd baselinux
           mkdir -p config/hooks/normal
 
-          cat > config/hooks/normal/enable-services.hook.chroot << 'EOF'
+          cat > config/hooks/normal/services.hook.chroot << 'EOF'
           #!/bin/sh
           systemctl enable NetworkManager || true
           systemctl enable sddm || true
           exit 0
           EOF
 
-          chmod +x config/hooks/normal/enable-services.hook.chroot
+          chmod +x config/hooks/normal/services.hook.chroot
 
-      ################################
-      # 6️⃣ ISO BUILD
-      ################################
+      ############################
+      # 7️⃣ BUILD
+      ############################
       - name: Build ISO
         run: |
           cd baselinux
           sudo lb build
 
-      ################################
-      # 7️⃣ UPLOAD
-      ################################
+      ############################
+      # 8️⃣ UPLOAD
+      ############################
       - name: Upload ISO
         uses: actions/upload-artifact@v4
         with:
